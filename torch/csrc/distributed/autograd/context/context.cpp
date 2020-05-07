@@ -1,8 +1,9 @@
+#include <torch/csrc/distributed/autograd/context/context.h>
+
 #include <functional>
 
 #include <c10/util/Exception.h>
 #include <torch/csrc/autograd/functions/accumulate_grad.h>
-#include <torch/csrc/distributed/autograd/context/context.h>
 
 namespace torch {
 namespace distributed {
@@ -209,6 +210,21 @@ const c10::Dict<torch::Tensor, torch::Tensor> DistAutogradContext::
     getGradients() const {
   std::lock_guard<std::mutex> guard(lock_);
   return accumulatedGrads_;
+}
+
+void DistAutogradContext::runGradCallbackForVariable(
+    const torch::autograd::Variable& variable,
+    GradCallback&& cb) {
+  std::lock_guard<std::mutex> guard(lock_);
+  auto it = accumulatedGrads_.find(variable);
+  TORCH_INTERNAL_ASSERT(
+      it != accumulatedGrads_.end(),
+      "The grad for the variable should exist in dist_autograd context.");
+  auto grad = it->value();
+  if (cb(grad)) {
+    // Needs to update the grad in the map.
+    accumulatedGrads_.insert(variable, std::move(grad));
+  }
 }
 
 } // namespace autograd
