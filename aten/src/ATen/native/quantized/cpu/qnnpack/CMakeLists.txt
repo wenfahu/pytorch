@@ -10,6 +10,7 @@ INCLUDE(GNUInstallDirs)
 
 # ---[ Project and semantic versioning.
 PROJECT(PYTORCH_QNNPACK C CXX ASM)
+find_package(OpenMP)
 
 # ---[ Options.
 OPTION(PYTORCH_QNNPACK_CUSTOM_THREADPOOL "Build QNNPACK for custom thread pool" OFF)
@@ -170,6 +171,10 @@ SET(PYTORCH_QNNPACK_ARM_NEON_UKERNELS
   src/q8avgpool/up8xm-neon.c
   src/q8conv/4x8-neon.c
   src/q8conv/8x8-neon.c
+  src/q8conv/winograd/s16_gemm.c
+  src/q8conv/winograd/transforms/input.c
+  src/q8conv/winograd/transforms/weight.c
+  src/q8conv/winograd/transforms/output.c
   src/q8dwconv/mp8x25-neon.c
   src/q8dwconv/up8x9-neon.c
   src/q8gavgpool/mp8x7p7q-neon.c
@@ -286,7 +291,7 @@ TARGET_INCLUDE_DIRECTORIES(pytorch_qnnpack PUBLIC src)
 SET_TARGET_PROPERTIES(pytorch_qnnpack PROPERTIES PUBLIC_HEADER include/pytorch_qnnpack.h)
 SET_TARGET_PROPERTIES(pytorch_qnnpack PROPERTIES PUBLIC_HEADER include/conv_utils.h)
 SET_TARGET_PROPERTIES(pytorch_qnnpack PROPERTIES PUBLIC_HEADER include/qnnpack_func.h)
-
+TARGET_LINK_LIBRARIES(pytorch_qnnpack PUBLIC OpenMP::OpenMP_C)
 # ---[ Configure clog
 IF(NOT TARGET clog)
   SET(CLOG_BUILD_TESTS OFF CACHE BOOL "")

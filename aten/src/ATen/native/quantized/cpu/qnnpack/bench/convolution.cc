@@ -969,6 +969,7 @@ static void DWConv5x5(benchmark::internal::Benchmark* b) {
   b->Args({1, 7, 7, 5, 5, 1, 1, 16, 1, 1});
 }
 
+/*
 BENCHMARK_CAPTURE(convolution_q8, mobilenet_v1, "MobileNet v1")
     ->Apply(MobileNetV1);
 BENCHMARK_CAPTURE(convolution_q8, mobilenet_v2, "MobileNet v2")
@@ -995,7 +996,9 @@ BENCHMARK_CAPTURE(convolution_q8, squeezenet_v10, "SqueezeNet 1.0")
     ->Apply(SqueezeNetV10);
 BENCHMARK_CAPTURE(convolution_q8, squeezenet_v11, "SqueezeNet 1.1")
     ->Apply(SqueezeNetV11);
+*/
 BENCHMARK_CAPTURE(convolution_q8, resnet18, "ResNet-18")->Apply(ResNet18);
+/*
 BENCHMARK_CAPTURE(convolution_q8, resnet50, "ResNet-50")->Apply(ResNet50);
 BENCHMARK_CAPTURE(convolution_q8, vgg, "VGG")->Apply(VGG);
 BENCHMARK_CAPTURE(convolution_q8, dwconv3x3, "3x3 DW Convolutions")
@@ -1007,6 +1010,7 @@ BENCHMARK_CAPTURE(
     ->Apply(DWConv3x3d2);
 BENCHMARK_CAPTURE(convolution_q8, dwconv5x5, "5x5 DW Convolutions")
     ->Apply(DWConv5x5);
+*/
 
 #ifndef PYTORCH_QNNPACK_BENCHMARK_NO_MAIN
 BENCHMARK_MAIN();

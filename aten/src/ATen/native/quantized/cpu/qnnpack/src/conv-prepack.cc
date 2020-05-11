@@ -1,7 +1,10 @@
 #include <conv_utils.h>
 #include <qnnpack/pack.h>
+#include <qnnpack/reorder.h>
 #include <qnnpack_func.h>
 #include <cstring>
+#include "q8conv/winograd/s16gemm.h"
+#include "q8conv/winograd/winograd.h"
 
 namespace qnnpack {
 
@@ -123,6 +126,52 @@ PrePackConvWeights::PrePackConvWeights(
             bias + group * conv_p.group_output_channels,
             (void*)((uintptr_t)packed_weights_ + group * packed_group_weights_size));
       }
+      break;
+    }
+    case pytorch_qnnp_ukernel_type_winograd:
+    {
+      // TODO pre setup on winograd conv   
+      const size_t group_input_channels  = conv_p.group_input_channels;
+      const size_t group_output_channels = conv_p.group_output_channels;
+
+      const size_t kernel_transform_size = group_input_channels * group_output_channels * 16;
+
+      int16_t* kernel_transform = (int16_t*) malloc(kernel_transform_size*sizeof(int16_t));
+      //
+      // add kernel weight reorder; caffe2 MCHW -> HWCM
+      // ref: https://github.com/pytorch/pytorch/blob/master/caffe2/operators/quantized/int8_conv_op.cc#L50
+      uint8_t* kernel_reorder = (uint8_t*) malloc(group_output_channels*group_input_channels*3*3*sizeof(uint8_t));
+      uint8_t** kernel_reorder_ptr = &kernel_reorder;
+      reorder_q8conv_w(kernel, kernel_reorder, group_output_channels, group_input_channels, 3, 3);
+      const size_t np = 8;
+      const size_t packedn = conv_p.packedN;
+      const size_t packed_weights_size = 16 * group_input_channels * packedn * sizeof(int16_t);
+      const size_t packed_bias_size = group_output_channels * sizeof(int32_t);
+      packed_weights_ = malloc(packed_weights_size + packed_bias_size);
+      memset(packed_weights_, 0, packed_weights_size * groups);
+      winograd_f_2_3_kernel_transform(
+              kernel_reorder, kernel_transform, 
+              group_input_channels, group_output_channels,
+              group_output_channels * group_input_channels,
+              group_output_channels,
+              conv_p.kernel_zero_point
+              );
+      free(*kernel_reorder_ptr);
+
+      const size_t packed_matrix_stride = group_input_channels * packedn;
+      const size_t kernel_matrix_stride = group_input_channels * group_output_channels;
+      for(size_t i = 0; i < 16; i++){
+          pack_s16gemm_w(group_input_channels, group_output_channels,
+                  group_input_channels, np,
+                  kernel_transform + i * kernel_matrix_stride,
+                  (int16_t*) packed_weights_ + i * packed_matrix_stride);
+      }
+      memcpy((void*)((uintptr_t)packed_weights_ + packed_weights_size), 
+              bias, packed_bias_size);
+
+      // convolution->packedN = packedn;
+      // convolution->bias = bias;
+
       break;
     }
     case pytorch_qnnp_ukernel_type_gemm:

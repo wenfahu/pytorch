@@ -14,6 +14,15 @@
 #undef max
 #endif
 
+#define _max(a,b) \
+    ({ __typeof__ (a) _a = (a); \
+     __typeof__ (b) _b = (b); \
+     _a > _b ? _a : _b; })
+
+#define _min(a,b) \
+    ({ __typeof__ (a) _a = (a); \
+     __typeof__ (b) _b = (b); \
+     _a < _b ? _a : _b; })
 inline static size_t min(size_t a, size_t b) {
   return a < b ? a : b;
 }

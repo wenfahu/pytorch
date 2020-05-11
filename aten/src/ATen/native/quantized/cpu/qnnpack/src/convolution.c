@@ -23,7 +23,10 @@
 #include <qnnpack/math.h>
 #include <qnnpack/operator.h>
 #include <qnnpack/pack.h>
+#include <qnnpack/reorder.h>
 #include <qnnpack/params.h>
+#include "q8conv/winograd/winograd.h"
+#include "q8conv/winograd/s16gemm.h"
 
 static inline size_t compute_output_dimension(
     size_t padded_input_dimension,
@@ -235,7 +238,12 @@ enum pytorch_qnnp_status pytorch_qnnp_create_convolution2d_nhwc_q8(
         group_input_channels >= pytorch_qnnp_params.q8conv_xzp.kthreshold
         ? pytorch_qnnp_ukernel_type_xzp_gemm
         : pytorch_qnnp_ukernel_type_gemm;
-  } else {
+  } 
+  // else if ( kernel_size == 9 && subsampling_height == 1 && subsampling_width == 1 && groups == 1 
+  //    && dilation_width == 1 && dilation_height == 1) {
+  //   ukernel_type = pytorch_qnnp_ukernel_type_winograd;
+  // } 
+  else {
     ukernel_type = pytorch_qnnp_ukernel_type_conv;
   }
   size_t zero_size = 0, zero_offset = 0;
@@ -363,6 +371,54 @@ enum pytorch_qnnp_status pytorch_qnnp_create_convolution2d_nhwc_q8(
             bias + group * group_output_channels,
             (void*)((uintptr_t)convolution->packed_weights + group * packed_group_weights_size));
       }
+      break;
+    }
+    case pytorch_qnnp_ukernel_type_winograd:
+    {
+
+      const size_t kernel_transform_size = group_input_channels * group_output_channels * 16;
+
+      int16_t* kernel_transform = (int16_t*) malloc(kernel_transform_size*sizeof(int16_t));
+      //
+      // TODO add kernel weight reorder; caffe2 MCHW -> HWCM
+      // ref: https://github.com/pytorch/pytorch/blob/master/caffe2/operators/quantized/int8_conv_op.cc#L50
+      // TODO move this to setup stage
+      // kernel transform
+      uint8_t* kernel_reorder = (uint8_t*) malloc(group_output_channels*group_input_channels*3*3*sizeof(uint8_t));
+      uint8_t** kernel_reorder_ptr = &kernel_reorder;
+      reorder_q8conv_w(kernel, kernel_reorder, group_output_channels, group_input_channels, 3, 3);
+      const size_t np = 8;
+      const size_t packedn = group_output_channels % np == 0? group_output_channels : (group_output_channels /
+              np + 1) * np;
+      const size_t packed_weights_size = 16 * group_input_channels * packedn * sizeof(int16_t);
+      const size_t packed_bias_size = group_output_channels * sizeof(int32_t);
+      convolution->packed_weights = malloc(packed_weights_size + packed_bias_size);
+      memset(convolution->packed_weights, 0, packed_weights_size * groups);
+      winograd_f_2_3_kernel_transform(
+              kernel_reorder, kernel_transform, 
+              group_input_channels, group_output_channels,
+              group_output_channels * group_input_channels,
+              group_output_channels,
+              kernel_zero_point
+              );
+      free(*kernel_reorder_ptr);
+
+      // TODO
+      // 3 transforms add to convolution
+      // Tiles cnt
+      convolution->kernel_transform = kernel_transform;
+      const size_t packed_matrix_stride = group_input_channels * packedn;
+      const size_t kernel_matrix_stride = group_input_channels * group_output_channels;
+      for(size_t i = 0; i < 16; i++){
+          pack_s16gemm_w(group_input_channels, group_output_channels,
+                  group_input_channels, np,
+                  kernel_transform + i * kernel_matrix_stride,
+                  (int16_t*) convolution->packed_weights + i * packed_matrix_stride);
+      }
+      memcpy((void*)((uintptr_t)convolution->packed_weights + packed_weights_size), 
+              bias, packed_bias_size);
+      convolution->packedN = packedn;
+
       break;
     }
     case pytorch_qnnp_ukernel_type_gemm:
@@ -563,6 +619,25 @@ enum pytorch_qnnp_status pytorch_qnnp_setup_convolution2d_nhwc_q8(
       }
       convolution->a_sum = a_sum;
       return pytorch_qnnp_status_success;
+    }
+    case pytorch_qnnp_ukernel_type_winograd:
+    {
+      const size_t tiles_x_count = divide_round_up(convolution->input_padding_top + input_height + convolution->input_padding_bottom 
+              - convolution->kernel_height + 1, 2 /* inner_tile_rows - kernel_rows + 1*/);
+      const size_t tiles_y_count = divide_round_up(convolution->input_padding_left + input_width + convolution->input_padding_right 
+              - convolution->kernel_width + 1, 2 /* inner_tile_cols - kernel_cosl + 1*/);
+      const size_t overlap_rows = convolution->kernel_height - 1;
+      const size_t overlap_cols = convolution->kernel_width - 1;
+
+      const size_t input_transform_size = tiles_x_count * tiles_y_count * convolution->group_input_channels * 16 * sizeof(int16_t);
+      const size_t output_transform_size = tiles_x_count * tiles_y_count * convolution->group_output_channels * 16;
+      int16_t* input_transform = (int16_t*) malloc(input_transform_size);
+      int32_t* output_transform = (int32_t*) calloc(output_transform_size, sizeof(int32_t));
+      convolution->tiles_x_count = tiles_x_count;
+      convolution->tiles_y_count = tiles_y_count;
+      convolution->input_transform = input_transform;
+      convolution->output_transform = output_transform;
+
     }
     case pytorch_qnnp_ukernel_type_conv: {
       const size_t groups = convolution->groups;

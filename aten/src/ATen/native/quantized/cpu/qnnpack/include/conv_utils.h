@@ -22,6 +22,9 @@ struct conv_param_t {
   const uint8_t output_min;
   const uint8_t output_max;
 
+  //winograd
+  size_t packedN;
+
   // The following are derived parameters
   enum pytorch_qnnp_ukernel_type ukernel_type; // kernel type based on input params
   size_t group_input_channels;
@@ -186,6 +189,11 @@ struct conv_param_t {
       ukernel_type = pytorch_qnnp_ukernel_type_dwconv;
     } else if (kernel_size == 1 && subsampling_dims[1] == 1 && subsampling_dims[0] == 1 && !any_padding) {
       ukernel_type = group_input_channels >= SIZE_MAX ? pytorch_qnnp_ukernel_type_xzp_gemm : pytorch_qnnp_ukernel_type_gemm;
+    }  else if ( kernel_size == 9 && subsampling_dims[1] == 1 && subsampling_dims[0] == 1 && groups == 1 
+     && dilation[0] == 1 && dilation[1] == 1) {
+      ukernel_type = pytorch_qnnp_ukernel_type_winograd;
+      size_t np = 8;
+      packedN = output_channels % np == 0? output_channels : (output_channels / np + 1) * np;
     } else {
       ukernel_type = pytorch_qnnp_ukernel_type_conv;
     }

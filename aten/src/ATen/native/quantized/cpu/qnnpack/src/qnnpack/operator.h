@@ -33,6 +33,7 @@ enum pytorch_qnnp_ukernel_type {
   pytorch_qnnp_ukernel_type_max_pooling,
   pytorch_qnnp_ukernel_type_softargmax,
   pytorch_qnnp_ukernel_type_xzp_gemm,
+  pytorch_qnnp_ukernel_type_winograd,
 };
 
 struct pytorch_qnnp_operator {
@@ -62,6 +63,14 @@ struct pytorch_qnnp_operator {
   const void* input;
   const void** indirection_buffer;
   void* a_sum;
+
+  // winograd
+  size_t tiles_x_count;
+  size_t tiles_y_count;
+  void* input_transform;
+  void* kernel_transform;
+  void* output_transform;
+  size_t packedN;
 
   size_t input2_pixel_stride;
   const void* input2;

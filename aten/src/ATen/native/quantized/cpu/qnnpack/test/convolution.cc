@@ -12,6 +12,7 @@
 
 #include "convolution-operator-tester.h"
 
+/*
 TEST(CONVOLUTION_OP, zero_batch) {
   ConvolutionOperatorTester()
       .batchSize(0)
@@ -277,18 +278,52 @@ TEST(CONVOLUTION_OP, grouped_3x1) {
       .iterations(3)
       .testQ8();
 }
+*/
 
-TEST(CONVOLUTION_OP, 3x3) {
+TEST(CONVOLUTION_OP, 3x3_0) {
   ConvolutionOperatorTester()
-      .inputSize(13, 12)
+      .inputSize(56, 56)
       .padding(1)
       .kernelSize(3, 3)
-      .groupInputChannels(15)
-      .groupOutputChannels(17)
+      .groupInputChannels(64)
+      .groupOutputChannels(64)
       .iterations(3)
       .testQ8();
 }
 
+TEST(CONVOLUTION_OP, 3x3_1) {
+  ConvolutionOperatorTester()
+      .inputSize(28, 28)
+      .padding(1)
+      .kernelSize(3, 3)
+      .groupInputChannels(128)
+      .groupOutputChannels(128)
+      .iterations(1)
+      .testQ8();
+}
+
+TEST(CONVOLUTION_OP, 3x3_2) {
+  ConvolutionOperatorTester()
+      .inputSize(14, 14)
+      .padding(1)
+      .kernelSize(3, 3)
+      .groupInputChannels(256)
+      .groupOutputChannels(256)
+      .iterations(1)
+      .testQ8();
+}
+
+TEST(CONVOLUTION_OP, 3x3_3) {
+  ConvolutionOperatorTester()
+      .inputSize(7, 7)
+      .padding(1)
+      .kernelSize(3, 3)
+      .groupInputChannels(512)
+      .groupOutputChannels(512)
+      .iterations(1)
+      .testQ8();
+}
+/*
 TEST(CONVOLUTION_OP, 3x3_without_padding) {
   ConvolutionOperatorTester()
       .inputSize(13, 12)
@@ -646,3 +681,4 @@ TEST(CONVOLUTION_OP, depthwise_5x5d2x1_runtime_quant) {
       .iterations(3)
       .testQ8(ConvolutionOperatorTester::Mode::Runtime);
 }
+*/

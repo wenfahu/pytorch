@@ -18,10 +18,230 @@
 #include <qnnpack/operator.h>
 #include <qnnpack/params.h>
 
+#include "q8conv/winograd/winograd.h"
+#include "q8conv/winograd/s16gemm.h"
+
 #ifdef _MSC_VER
 #include <malloc.h>
 #endif
 
+struct winograd_input_transform_context {
+    const uint8_t* a;
+    int16_t* input_transform;
+    size_t input_row_stride;
+    size_t input_col_stride;
+    size_t channels;
+    size_t matrix_row_stride;
+    size_t matrix_stride;
+    size_t tiles_x_count;
+    size_t tiles_y_count;
+    size_t padding_top;
+    size_t padding_bottom;
+    size_t padding_left;
+    size_t padding_right;
+    size_t rows;
+    size_t cols;
+    union pytorch_qnnp_conv_quantization_params quantization_params; 
+    // const q8conv_ukernel_function ukernel;
+};
+
+void compute_input_transform(
+    const struct winograd_input_transform_context context[1]
+        )
+{
+    // OLA
+    // TODO: padding
+    // Input layout: HWC
+    // row_stride: w * c
+    // col_stride: c
+    // Output layout : MATRICE_SIZE x NUM_TILES x CH, ie 16 x (tile_x_count x tile_y_count) x channels
+
+    const int input_row_stride  = context->input_row_stride;
+    const int input_col_stride  = context->input_col_stride;
+    const int matrix_row_stride = context->matrix_row_stride; // TODO: stride for store transformed tile = channel dim
+    const int matrix_stride     = context->matrix_stride; // stride between output matrices
+    const int channels          = context->channels; // TODO:
+    // TODO: tile count x/y
+    const int tiles_x_count     = context->tiles_x_count;
+    const int tiles_y_count     = context->tiles_y_count;
+
+    const int padding_top    = context->padding_top;
+    const int padding_bottom = context->padding_bottom;
+    const int padding_left   = context->padding_left;
+    const int padding_right  = context->padding_right;
+
+    const int rows = context->rows;
+    const int cols = context->cols;
+        
+    const int inner_tile_rows     = 4;
+    const int inner_tile_cols     = 4;
+    const int overlap_rows        = 2;
+    const int overlap_cols        = 2;
+    const uint8_t* inptr = context->a;
+    int16_t* ouptr = context->input_transform;
+    const uint8_t zero_point = (context->quantization_params).neon.input_zero_point;
+
+    // #pragma omp parallel for collapse(2)
+    for(int tile_i = 0; tile_i < tiles_x_count; tile_i++){
+        // start and end of the row index in the tiles
+        // const int row_top = tile_i * (inner_tile_rows - overlap_rows);
+        // const int row_bottom = row_top + inner_tile_rows;
+
+        // const uint8_t* inptr_row = inptr + row_top * input_row_stride;
+        // const int16_t* ouptr_row = ouptr + tile_i * tile_y_count * matrix_row_stride;
+        for(int tile_j = 0; tile_j < tiles_y_count; tile_j++)
+        {
+
+            // start and end of the row index in the tiles
+            const int row_top    = tile_i * (inner_tile_rows - overlap_rows) - padding_top;
+            const int row_bottom = row_top + inner_tile_rows;
+
+            const int row_pad_top = _max(0, padding_top - tile_i * (inner_tile_rows - overlap_rows));
+            const int row_pad_bottom = _max(0, row_bottom - rows);
+            const int row_offset  = _min(0, row_pad_top - padding_top);
+
+            const uint8_t* inptr_row = inptr + (tile_i*(inner_tile_rows - overlap_rows) + row_offset) * input_row_stride;
+            const int16_t* ouptr_row = ouptr + tile_i * tiles_y_count * matrix_row_stride;
+
+            // start and end of the col index of the tile
+            const int tile_left  = tile_j * (inner_tile_cols - overlap_cols) - padding_left;
+            const int tile_right = tile_left + inner_tile_cols;
+
+            const int tile_pad_left  = _max(0, padding_left - tile_j * (inner_tile_cols - overlap_cols));
+            const int tile_pad_right = _max(0, tile_right - cols);
+
+            const int col_offset = _min(0, tile_pad_left - padding_left);
+
+            const uint8_t* inptr_tile = inptr_row +  input_col_stride * (tile_j * (inner_tile_cols - overlap_cols) + col_offset);
+            const int16_t* ouptr_tile = ouptr_row + tile_j * matrix_row_stride;
+
+            if (row_pad_top || tile_pad_left || row_pad_bottom || tile_pad_right){
+                uint8_t* padded_tile = (uint8_t*) malloc(inner_tile_rows * inner_tile_cols * channels * sizeof(uint8_t));
+                for (int i=0; i < inner_tile_rows; i++)
+                {
+                    for(int j =0; j < inner_tile_cols; j++)
+                    {
+                        uint8_t* padded_ptr = padded_tile + i * input_col_stride * inner_tile_cols + j * input_col_stride;
+                        if( i < row_pad_top || inner_tile_rows - row_pad_bottom <= i ||
+                                j < tile_pad_left || inner_tile_cols - tile_pad_right <= j)
+                        {
+                            for(int n=0; n<channels; n++){
+                                padded_ptr[n] = zero_point;
+                            }
+                        }
+                        else
+                        {
+                            const int in_i = i - row_pad_top, in_j = j - tile_pad_left;
+                            const uint8_t* input = inptr_tile + in_i * input_row_stride + in_j * input_col_stride;
+                            memcpy(padded_ptr, input, channels * sizeof(uint8_t));
+                        }
+                    }
+                }
+                // context->ukernel(
+                winograd_f_2_3_input_transform(
+                        padded_tile, ouptr_tile, input_col_stride * inner_tile_cols, input_col_stride, channels, matrix_stride, zero_point
+                        );
+                free(padded_tile);
+            }
+            else
+            {
+                // context->ukernel(
+                winograd_f_2_3_input_transform(
+                        inptr_tile, ouptr_tile, input_row_stride, input_col_stride, channels, matrix_stride, zero_point
+                        );
+            }
+        }
+    }
+}
+
+struct winograd_output_transform_context {
+    int32_t* input;
+    uint8_t* output;
+    size_t channels;
+    size_t output_row_stride;
+    size_t output_col_stride;
+    size_t matrix_stride;
+    size_t matrix_row_stride;
+    size_t tiles_x_count;
+    size_t tiles_y_count;
+    size_t rows;
+    size_t cols;
+    int32_t* bias;
+    union pytorch_qnnp_conv_quantization_params quantization_params; 
+};
+
+
+void compute_output_transform(
+    const struct winograd_output_transform_context context[1]
+        )
+{
+    const int output_tile_rows = 2;
+    const int output_tile_cols = 2;
+
+    const int matrix_stride = context->matrix_stride; // channels X tiles
+    const int matrix_row_stride = context->matrix_row_stride; // num of output channels
+
+    const int32_t* inptr = context->input;
+    const uint8_t* ouptr = context->output;
+
+    const int channels = context->channels;
+
+    const int output_row_stride = context->output_row_stride; // channels X W
+    const int output_col_stride = context->output_col_stride; // channels
+
+
+    const int tiles_x_count = context->tiles_x_count;
+    const int tiles_y_count = context->tiles_y_count;
+
+    const int rows = context->rows;
+    const int cols = context->cols;
+
+    const int matrix_tile_col_stride = matrix_row_stride;
+    const int matrix_tile_row_stride = tiles_y_count * matrix_tile_col_stride;
+    const int32_t* bias = context->bias;
+
+    // #pragma omp parallel for collapse(2)
+    for(int tile_i = 0; tile_i < tiles_x_count; tile_i++){
+        // const int32_t* inptr_row = inptr + tile_i * matrix_tile_row_stride;
+        // const uint8_t* ouptr_row = ouptr + tile_i * output_tile_rows * output_row_stride;
+        for (int tile_j = 0; tile_j < tiles_y_count; tile_j++){
+
+
+            const int row_pad_bottom = _max(0, (tile_i + 1)*output_tile_rows - rows);
+            const int32_t* inptr_row = inptr + tile_i * matrix_tile_row_stride;
+            const uint8_t* ouptr_row = ouptr + tile_i * output_tile_rows * output_row_stride;
+
+            const int tile_pad_right = _max(0, (tile_j + 1)*output_tile_cols - cols);
+            const int32_t* inptr_tile = inptr_row + tile_j * matrix_tile_col_stride;
+            const uint8_t* ouptr_tile = ouptr_row + tile_j * output_tile_cols * output_col_stride;
+
+            if ( row_pad_bottom || tile_pad_right){
+              // if ( tile_i == 3 && tile_j == 3){
+              //   raise(SIGINT);
+              // }
+              uint8_t* tmp_tile = (uint8_t*) malloc(output_tile_rows * output_tile_cols * channels
+                  * sizeof(uint8_t));
+              winograd_f_2_3_output_transform(inptr_tile, bias, tmp_tile, channels,
+                  output_col_stride * output_tile_cols, output_col_stride, matrix_stride, &context->quantization_params);
+              for(size_t i = 0; i < output_tile_rows - row_pad_bottom; i++){
+                for(size_t j = 0; j < output_tile_cols - tile_pad_right; j++){
+                    memcpy(
+                      (void*)(ouptr_tile + i * output_row_stride + j * output_col_stride),
+                      (void*)(tmp_tile + i * output_col_stride * output_tile_cols + j * output_col_stride),
+                      sizeof(uint8_t) * channels
+                      );
+                }
+              }
+
+              free(tmp_tile);
+
+            } else {
+              winograd_f_2_3_output_transform(inptr_tile, bias, ouptr_tile, channels, 
+                      output_row_stride, output_col_stride, matrix_stride, &context->quantization_params);
+            }
+        }
+    }
+}
 struct q8gemm_context {
   size_t k;
   size_t k_stride;
@@ -837,6 +1057,81 @@ enum pytorch_qnnp_status pytorch_qnnp_run_operator(
           mr,
           nr);
       break;
+    }
+    case pytorch_qnnp_ukernel_type_winograd:
+    {
+      const size_t group_input_channels = op->group_input_channels;
+      const size_t group_output_channels = op->group_output_channels;
+
+      // Input Transform
+      const size_t input_row_stride = op->input_width * group_input_channels;
+      const size_t input_col_stride = group_input_channels;
+      const size_t matrix_row_stride = group_input_channels;
+      const size_t tiles_x_count = op->tiles_x_count;
+      const size_t tiles_y_count = op->tiles_y_count;
+      const size_t num_tiles = tiles_y_count * tiles_y_count;
+      const size_t matrix_stride = num_tiles * group_input_channels;
+      const size_t channels = group_input_channels;
+
+      struct winograd_input_transform_context input_context = {
+          .a = op->input,
+          .input_transform = op->input_transform,
+          .input_row_stride = input_row_stride,
+          .input_col_stride = input_col_stride,
+          .channels = group_input_channels,
+          .matrix_stride = matrix_stride,
+          .tiles_x_count = tiles_x_count,
+          .tiles_y_count = tiles_y_count,
+          .matrix_row_stride = matrix_row_stride,
+          .rows = op->input_height,
+          .cols = op->input_width,
+          .padding_top = op->input_padding_top,
+          .padding_bottom = op->input_padding_bottom,
+          .padding_left = op->input_padding_left,
+          .padding_right = op->input_padding_right,
+          .quantization_params = op->conv_quantization_params
+      };
+
+      compute_input_transform(&input_context);
+
+      // 16 parallel GEMM
+      const size_t input_matrix_stride = group_input_channels * num_tiles;
+      const size_t weight_matrix_stride = group_input_channels * op->packedN;
+      const size_t output_matrix_stride = group_output_channels * num_tiles;
+      const size_t packed_weights_size = 16 * group_input_channels * op->packedN * sizeof(int16_t);
+      for(int gemm_idx = 0; gemm_idx != 16; gemm_idx++){
+          int16_t* a = (int16_t*) op->input_transform + gemm_idx * input_matrix_stride;
+          int16_t* b = (int16_t*) ((uintptr_t) op->packed_weights + gemm_idx * weight_matrix_stride * sizeof(int16_t));
+          int32_t* c = (int32_t*) op->output_transform + gemm_idx * output_matrix_stride;
+          s16gemm(
+                  a, b, c,
+                  num_tiles,
+                  group_output_channels,
+                  group_input_channels
+                  );
+      }
+
+      // Output transform
+      //
+      struct winograd_output_transform_context output_context = {
+          .input = op->output_transform,
+          .output = op->output,
+          .channels = group_output_channels,
+          .output_row_stride = group_output_channels * op->output_width,
+          .output_col_stride = group_output_channels,
+          .matrix_stride = group_output_channels * num_tiles,
+          .matrix_row_stride = group_output_channels,
+          .tiles_y_count = tiles_y_count,
+          .tiles_x_count = tiles_x_count,
+          .rows = op->output_height,
+          .cols = op->output_width,
+          .bias = (int32_t*)((uintptr_t)op->packed_weights + packed_weights_size),
+          .quantization_params = op->conv_quantization_params
+      };
+
+      compute_output_transform(&output_context);
+      break;
+
     }
     case pytorch_qnnp_ukernel_type_conv: {
       const size_t batch_size = op->batch_size;
