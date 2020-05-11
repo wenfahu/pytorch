@@ -143,6 +143,20 @@ class TORCH_API DistAutogradContext {
 using ContextPtr = std::shared_ptr<DistAutogradContext>;
 using ContextWeakPtr = std::weak_ptr<DistAutogradContext>;
 
+// This class stores a weak_ptr to the current dist_autograd context in a thread
+// local variable so that a reader can retrieve the context.
+class ThreadLocalDistAutogradContext {
+ public:
+  explicit ThreadLocalDistAutogradContext(ContextWeakPtr&& context_wp);
+  ~ThreadLocalDistAutogradContext();
+
+  static ContextWeakPtr getContextWeakPtr();
+
+ private:
+  ContextWeakPtr prev_context_weak_ptr_;
+  ContextWeakPtr context_weak_ptr_;
+};
+
 } // namespace autograd
 } // namespace distributed
 } // namespace torch
