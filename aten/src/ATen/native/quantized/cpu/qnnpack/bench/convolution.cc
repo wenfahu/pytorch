@@ -102,6 +102,9 @@ static void convolution_q8(benchmark::State& state, const char* net) {
     state.SkipWithError("failed to create Convolution operator");
   }
 
+  pthreadpool_t threadpool = pthreadpool_create(0);
+  assert(threadpool != NULL);
+
   status = pytorch_qnnp_setup_convolution2d_nhwc_q8(
       convolutionObject,
       batchSize,
@@ -111,14 +114,19 @@ static void convolution_q8(benchmark::State& state, const char* net) {
       inputPixelStride,
       output.data(),
       outputPixelStride,
-      nullptr /* thread pool */);
+      threadpool);
+      // nullptr /* thread pool */);
   if (status != pytorch_qnnp_status_success) {
     state.SkipWithError("failed to setup Convolution operator");
   }
 
   for (auto _ : state) {
-    pytorch_qnnp_run_operator(convolutionObject, nullptr /* thread pool */);
+    // pytorch_qnnp_run_operator(convolutionObject, nullptr /* thread pool */);
+    pytorch_qnnp_run_operator(convolutionObject, threadpool /* thread pool */);
   }
+
+  pthreadpool_destroy(threadpool);
+  threadpool = NULL;
 
   status = pytorch_qnnp_delete_operator(convolutionObject);
   if (status != pytorch_qnnp_status_success) {

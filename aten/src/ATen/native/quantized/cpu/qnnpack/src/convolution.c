@@ -239,10 +239,10 @@ enum pytorch_qnnp_status pytorch_qnnp_create_convolution2d_nhwc_q8(
         ? pytorch_qnnp_ukernel_type_xzp_gemm
         : pytorch_qnnp_ukernel_type_gemm;
   } 
-  // else if ( kernel_size == 9 && subsampling_height == 1 && subsampling_width == 1 && groups == 1 
-  //    && dilation_width == 1 && dilation_height == 1) {
-  //   ukernel_type = pytorch_qnnp_ukernel_type_winograd;
-  // } 
+  else if ( kernel_size == 9 && subsampling_height == 1 && subsampling_width == 1 && groups == 1 
+     && dilation_width == 1 && dilation_height == 1) {
+    ukernel_type = pytorch_qnnp_ukernel_type_winograd;
+  } 
   else {
     ukernel_type = pytorch_qnnp_ukernel_type_conv;
   }

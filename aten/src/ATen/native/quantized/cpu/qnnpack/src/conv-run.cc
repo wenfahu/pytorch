@@ -66,7 +66,7 @@ void compute_input_transform(
     int16_t* ouptr = context->input_transform;
     const uint8_t zero_point = (context->quantization_params).neon.input_zero_point;
 
-    // #pragma omp parallel for collapse(2)
+    #pragma omp parallel for collapse(2)
     for(int tile_i = 0; tile_i < tiles_x_count; tile_i++){
         // start and end of the row index in the tiles
         // const int row_top = tile_i * (inner_tile_rows - overlap_rows);
@@ -185,7 +185,7 @@ void compute_output_transform(
     const int matrix_tile_row_stride = tiles_y_count * matrix_tile_col_stride;
     const int32_t* bias = context->bias;
 
-    // #pragma omp parallel for collapse(2)
+    #pragma omp parallel for collapse(2)
     for(int tile_i = 0; tile_i < tiles_x_count; tile_i++){
         // const int32_t* inptr_row = inptr + tile_i * matrix_tile_row_stride;
         // const uint8_t* ouptr_row = ouptr + tile_i * output_tile_rows * output_row_stride;
@@ -951,7 +951,8 @@ enum pytorch_qnnp_status qnnpackConv(
       const size_t weight_matrix_stride = convolution->group_input_channels * conv_p.packedN;
       const size_t packed_weights_size = 16 * convolution->group_input_channels * conv_p.packedN * sizeof(int16_t);
       const size_t output_matrix_stride = convolution->group_output_channels * num_tiles;
-      for(int gemm_idx = 0; gemm_idx != 16; gemm_idx++){
+      #pragma omp parallel for
+      for(int gemm_idx = 0; gemm_idx < 16; gemm_idx++){
           int16_t* a = (int16_t*) input_transform + gemm_idx * input_matrix_stride;
           int16_t* b = (int16_t*) ((uintptr_t) packed_weights + gemm_idx * weight_matrix_stride * sizeof(int16_t));
           int32_t* c = (int32_t*) output_transform + gemm_idx * output_matrix_stride;
